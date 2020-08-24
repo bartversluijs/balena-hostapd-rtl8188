@@ -1,0 +1,61 @@
+##
+## Build Container
+##
+FROM balenalib/%%BALENA_MACHINE_NAME%%-debian
+
+# Install all the things
+RUN apt-get update && apt-get install -y \
+  build-essential \
+  git \
+  wget \
+  && rm -rf /var/lib/apt/lists/*
+
+# Install hostapd for RTL8188
+RUN git clone https://github.com/jenssegers/RTL8188-hostapd \
+  && cd RTL8188-hostapd/hostapd \
+  && make \
+  && make install
+
+# Install rtl8188eu firmware
+RUN mkdir -p /lib/firmware/rtlwifi \
+  && wget -O /lib/firmware/rtlwifi/rtl8188eufw.bin https://github.com/OpenELEC/wlan-firmware/blob/master/firmware/rtlwifi/rtl8188eufw.bin?raw=true
+
+##
+## RUNNING CONTAINER
+##
+FROM balenalib/%%BALENA_MACHINE_NAME%%-alpine
+
+# Install all the things
+RUN apk add --update \
+  dnsmasq
+
+# Set workdir
+WORKDIR /usr/src/app
+
+# Enable udev for detection of dynamically plugged devices
+ENV UDEV=1
+
+# Symlink aarch64
+RUN ln -s /lib/ld-musl-aarch64.so.1 /lib/ld-linux-aarch64.so.1
+
+# Add hostapd from build container
+COPY --from=0 /usr/local/bin/hostapd /usr/local/bin/hostapd_RTL8188
+COPY --from=0 /usr/local/bin/hostapd_cli /usr/local/bin/hostapd_cli_RTL8188
+COPY --from=0 /etc/init.d/hostapd /etc/init.d/hostapd_RTL8188
+
+# Add rtl8188eu firmware
+COPY --from=0 /lib/firmware/rtlwifi /lib/firmware/rtlwifi
+
+# Copy configuration files
+COPY ./config/hostapd.conf /etc/hostapd/hostapd.conf
+COPY ./config/dnsmasq.conf /etc/dnsmasq.conf
+COPY ./config/interfaces /etc/network/interfaces
+
+# Add udev rule
+COPY ./config/udev/61-hotplug-ap0.rules /etc/udev/rules.d/61-hotplug-ap0.rules
+
+# Add entry.sh
+COPY entry.sh ./entry.sh
+
+# Start
+CMD ["bash", "entry.sh"]
